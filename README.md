@@ -1,6 +1,6 @@
 # TypeScript dependency CLI
 
-List the transitive TypeScript dependencies used by one or more files.
+List the transitive TypeScript dependencies used by one or more files or directories.
 
 Install:
 
@@ -16,10 +16,23 @@ bun run /path/to/import-analysis/index.ts \
   packages/manager/src/features/Account/AccountLoginsTableRow.tsx
 ```
 
-When running in this repository, use `bun run index.ts <files...>`.
+To analyze a directory recursively, pass the directory itself or use a
+shell-expanded wildcard (which may produce a mixture of files and directories):
+
+```bash
+bun run /path/to/import-analysis/index.ts packages/manager/src/features/EntityTransfers
+bun run /path/to/import-analysis/index.ts packages/manager/src/features/EntityTransfers/*
+```
+
+When running in this repository, use `bun run index.ts <files or directories...>`.
 
 - Prints one path per line, relative to the working directory, sorted and deduplicated.
-- Excludes the supplied entry files, even when a dependency imports them.
+- Treats every TypeScript file in a supplied directory as an entry, recursively,
+  and excludes all entry files from the output, even when a dependency imports them.
+- Ignores non-TypeScript files within directories and among mixed inputs; a
+  non-TypeScript file by itself is an error. Empty directories produce no output.
+- Skips `node_modules` directories while scanning and follows directory symlinks
+  without revisiting the same directory.
 - Includes `.ts`, `.tsx`, `.mts`, `.cts`, and declaration files.
 - Follows imports, re-exports, type-only imports, literal `import()` and `require()`,
   import-equals declarations, and triple-slash file/type references.

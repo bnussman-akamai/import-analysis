@@ -276,6 +276,43 @@ test("accepts explicit entries outside tsconfig include patterns and handles dep
   expect(collectDependencies(["entry.ts", "./entry.ts"], cwd)).toEqual([]);
 });
 
+test("recursively analyzes directory entries and excludes all entries from the results", () => {
+  const cwd = project({
+    "feature/entry.ts": 'import "./nested/other"; import "../shared";',
+    "feature/nested/other.tsx": 'import "../../shared"; import "../../second.mjs";',
+    "feature/nested/types.d.ts": 'import "../../types";',
+    "feature/style.css": "",
+    "feature/node_modules/ignored/broken.ts": 'import "./missing";',
+    "shared.ts": "",
+    "second.mts": "",
+    "types.d.ts": "",
+  });
+  symlinkSync(join(cwd, "feature"), join(cwd, "feature/nested/cycle"), "dir");
+  symlinkSync(join(cwd, "feature/nested"), join(cwd, "feature/linked"), "dir");
+
+  expect(collectDependencies(["feature", "feature/nested/other.tsx"], cwd)).toEqual([
+    "second.mts", "shared.ts", "types.d.ts",
+  ]);
+});
+
+test("accepts shell-expanded mixed paths and empty directories while rejecting missing entries", () => {
+  const cwd = project({
+    "feature/entry.ts": 'import "../shared";',
+    "feature/nested/entry.cts": 'import "../../second";',
+    "feature/style.css": "",
+    "shared.ts": "",
+    "second.ts": "",
+    "empty/.keep": "",
+  });
+  expect(collectDependencies(["feature/entry.ts", "feature/nested", "feature/style.css"], cwd)).toEqual([
+    "second.ts", "shared.ts",
+  ]);
+  expect(collectDependencies(["feature/entry.ts", "feature/style.css"], cwd)).toEqual(["shared.ts"]);
+  expect(collectDependencies(["empty"], cwd)).toEqual([]);
+  expect(() => collectDependencies(["empty", "missing"], cwd)).toThrow("missing");
+  expect(() => collectDependencies(["feature/style.css"], cwd)).toThrow("Not an existing TypeScript file");
+});
+
 test("CLI prints only paths on success, help on request, and errors without partial output", () => {
   const cwd = project({
     "entry.ts": 'import "./dependency";',
@@ -283,6 +320,9 @@ test("CLI prints only paths on success, help on request, and errors without part
     "dependency.ts": "",
     "nested.ts": "",
     "broken.ts": 'import "./dependency"; import "./missing";',
+    "feature/entry.ts": 'import "../dependency";',
+    "feature/nested/entry.ts": 'import "../../nested";',
+    "feature/style.css": "",
   });
   const run = (...args: string[]) => Bun.spawnSync({
     cmd: [process.execPath, "run", join(import.meta.dir, "index.ts"), ...args],
@@ -294,6 +334,11 @@ test("CLI prints only paths on success, help on request, and errors without part
   expect(success.exitCode).toBe(0);
   expect(success.stdout.toString()).toBe("dependency.ts\nnested.ts\n");
   expect(success.stderr.toString()).toBe("");
+
+  const folder = run("feature/entry.ts", "feature/nested", "feature/style.css");
+  expect(folder.exitCode).toBe(0);
+  expect(folder.stdout.toString()).toBe("dependency.ts\nnested.ts\n");
+  expect(folder.stderr.toString()).toBe("");
 
   const failure = run("broken.ts");
   expect(failure.exitCode).toBe(1);

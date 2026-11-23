@@ -1,11 +1,12 @@
+import { readdirSync, statSync } from "node:fs";
 import { builtinModules } from "node:module";
-import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 
 const typescriptFile = /\.(?:[cm]?ts|tsx)$/i;
 const scriptExtension = /^\.(?:[cm]?[jt]s|[jt]sx)$/i;
 const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
-const usage = "Usage: bun run index.ts <file.ts|file.tsx> [more files...]";
+const usage = "Usage: bun run index.ts <file.ts|file.tsx|directory> [more files or directories...]";
 
 function isExternal(file: string): boolean {
   return file.split(/[\\/]/).includes("node_modules");
@@ -29,16 +30,49 @@ export function collectDependencies(entries: readonly string[], cwd = process.cw
     const absolute = resolve(cwd, file);
     return ts.sys.realpath?.(absolute) ?? absolute;
   };
-  const roots = new Set(entries.map((entry) => {
-    const file = canonical(entry);
-    if (!typescriptFile.test(file) || !ts.sys.fileExists(file)) {
-      throw new Error(`Not an existing TypeScript file: ${entry}`);
+  const roots = new Set<string>();
+  const visitedDirectories = new Set<string>();
+  const unsupported: string[] = [];
+  let hasDirectory = false;
+
+  function collectDirectory(directory: string): void {
+    const canonicalDirectory = canonical(directory);
+    if (isExternal(directory) || isExternal(canonicalDirectory) || visitedDirectories.has(canonicalDirectory)) return;
+    visitedDirectories.add(canonicalDirectory);
+    for (const name of readdirSync(canonicalDirectory)) {
+      const path = join(canonicalDirectory, name);
+      if (isExternal(path)) continue;
+      const stat = statSync(path);
+      if (stat.isDirectory()) collectDirectory(path);
+      else if (stat.isFile() && typescriptFile.test(path)) {
+        const file = canonical(path);
+        if (!isExternal(file)) roots.add(file);
+      }
     }
+  }
+
+  for (const entry of entries) {
+    const path = resolve(cwd, entry);
+    if (!ts.sys.fileExists(path) && !ts.sys.directoryExists(path)) {
+      throw new Error(`Not an existing TypeScript file or directory: ${entry}`);
+    }
+    const file = canonical(path);
     if (isExternal(file)) {
-      throw new Error(`Entry files must be outside node_modules: ${entry}`);
+      throw new Error(`Entries must be outside node_modules: ${entry}`);
     }
-    return file;
-  }));
+    if (ts.sys.directoryExists(path)) {
+      hasDirectory = true;
+      collectDirectory(path);
+    } else if (typescriptFile.test(path)) {
+      roots.add(file);
+    } else {
+      unsupported.push(entry);
+    }
+  }
+  if (!roots.size) {
+    if (hasDirectory) return [];
+    throw new Error(`Not an existing TypeScript file: ${unsupported[0]}`);
+  }
   const configs = new Map<string, ts.CompilerOptions>();
   const contexts = new Map<string, {
     options: ts.CompilerOptions;
